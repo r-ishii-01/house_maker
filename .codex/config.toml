@@ -1,0 +1,7 @@
+# 親スレッドが統合を担当し、独立した実装・レビュー・検証を子3枠に順次割り当てる。
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+
+# model と model_reasoning_effort の既定値は設けず、親の選択を継承する。
+# Context7 はユーザー共通設定 ~/.codex/config.toml に登録済み。重複する接続設定はここに置かない。

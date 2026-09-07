@@ -1,0 +1,13 @@
+# ローカルの生成物とSites専用の情報をVercelのソースアップロードから除く。
+.openai
+.wrangler
+.next
+.vinext
+dist
+dist-vercel
+node_modules
+test-results
+playwright-report
+coverage
+*.tsbuildinfo
+.env*
