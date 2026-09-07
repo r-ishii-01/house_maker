@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- 既存レイアウトの日本語設定とメタデータを、静的配信するHTMLにも引き継ぐ。 -->
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="間取りを描き、家具を置いて、理想の住まいを2Dと3Dで確かめる。"
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Housemaker — 3Dハウスプランナー</title>
+  </head>
+  <body>
+    <!-- Reactのマウント先。既存の画面はSPAエントリーから読み込む。 -->
+    <div id="root"></div>
+    <noscript
+      >Housemakerを利用するには、ブラウザーのJavaScriptを有効にしてください。</noscript
+    >
+    <script type="module" src="/app/vercel-entry.tsx"></script>
+  </body>
+</html>

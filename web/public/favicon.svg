@@ -1,0 +1,2 @@
+<!-- Housemakerのアプリアイコン。小さな表示でも識別できる立方体の線を描く。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#152c2d"/><g fill="none" stroke="#c6e6ac" stroke-width="1.6" stroke-linejoin="round"><path d="m20 8 11 6v13l-11 6-11-6V14z"/><path d="m9 14 11 6 11-6M20 20v13M14 11l11 6"/></g></svg>
