@@ -28,6 +28,21 @@ export interface Wall {
   height: number;
   thickness: number;
 }
+// 部屋の辺は形状変更に追従するID参照、追加壁はその壁IDで固定する。
+export type DoorHost =
+  | { kind: 'room'; id: string; side: 'north' | 'east' | 'south' | 'west' }
+  | { kind: 'wall'; id: string };
+export interface Door {
+  id: string;
+  host: DoorHost;
+  // offsetは壁始点から開口始点までのm。吊元と開く側を分け、4通りの片開きを表現する。
+  offset: number;
+  width: number;
+  height: number;
+  hinge: 'start' | 'end';
+  // SVG Y = 床面Z。+1は壁の進行方向に対する法線(-uz, ux)側。
+  swing: 1 | -1;
+}
 export interface PlacedFurniture {
   id: string;
   kind: FurnitureKind;
@@ -40,6 +55,7 @@ export interface PlanDocument {
   name: string;
   rooms: Room[];
   walls: Wall[];
+  doors: Door[];
   furniture: PlacedFurniture[];
 }
 export interface FurnitureDefinition {
@@ -52,8 +68,36 @@ export interface FurnitureDefinition {
   color: string;
 }
 // 追加時と保存復元時で同じ上限を使い、保存できた文書が復元できない状態を防ぐ。
-export const PLAN_LIMITS = { rooms: 100, walls: 200, furniture: 500 };
-export const BOARD = { width: 16, depth: 12 };
+export const PLAN_LIMITS = {
+  rooms: 100,
+  walls: 200,
+  doors: 200,
+  furniture: 500,
+};
+// 実際に作図・保存できる敷地の上限。表示倍率とは分離し、大きい住宅でも10 cm単位で編集する。
+export const BOARD = { width: 40, depth: 30 };
+
+// 原点を固定した表示範囲（m）。小さいプランは従来の16×12 mを保ち、部屋と壁の外側に2 mの余白を取る。
+// 2Dの保存復元時と3Dの台座・視点で共用し、敷地を広げてもサンプルが極端に小さくならないようにする。
+export function getPlanDisplayBounds(plan: PlanDocument): {
+  width: number;
+  depth: number;
+} {
+  let width = 16;
+  let depth = 12;
+  for (const room of plan.rooms) {
+    width = Math.max(width, room.x + room.width + 2);
+    depth = Math.max(depth, room.z + room.depth + 2);
+  }
+  for (const wall of plan.walls) {
+    width = Math.max(width, wall.x1 + 2, wall.x2 + 2);
+    depth = Math.max(depth, wall.z1 + 2, wall.z2 + 2);
+  }
+  return {
+    width: Math.min(BOARD.width, width),
+    depth: Math.min(BOARD.depth, depth),
+  };
+}
 export const FURNITURE_CATALOG: FurnitureDefinition[] = [
   {
     kind: 'sofa',
@@ -209,6 +253,193 @@ export function roomIsValid(plan: PlanDocument, room: Room): boolean {
   );
 }
 
+// 自動生成される部屋外周も追加壁と同じ形へ変換する。南北辺はX増加、東西辺はZ増加。
+export function getDoorWall(plan: PlanDocument, host: DoorHost): Wall | null {
+  if (!host || typeof host.id !== 'string') return null;
+  if (host.kind === 'wall')
+    return plan.walls.find((wall) => wall.id === host.id) ?? null;
+  if (host.kind !== 'room') return null;
+  const room = plan.rooms.find((item) => item.id === host.id);
+  if (!room || !['north', 'east', 'south', 'west'].includes(host.side))
+    return null;
+  const horizontal = host.side === 'north' || host.side === 'south';
+  const x = room.x + (host.side === 'east' ? room.width : 0);
+  const z = room.z + (host.side === 'south' ? room.depth : 0);
+  return {
+    id: `room-boundary:${room.id}:${host.side}`,
+    x1: x,
+    z1: z,
+    x2: x + (horizontal ? room.width : 0),
+    z2: z + (horizontal ? 0 : room.depth),
+    height: 2.6,
+    thickness: 0.14,
+  };
+}
+
+// 2Dの円弧と3Dの扉板が同じ位置に開くよう、世界座標の両端と吊元を一度だけ計算する。
+export function getDoorGeometry(plan: PlanDocument, door: Door) {
+  const wall = getDoorWall(plan, door.host);
+  if (!wall) return null;
+  const dx = wall.x2 - wall.x1;
+  const dz = wall.z2 - wall.z1;
+  const length = Math.hypot(dx, dz);
+  if (!Number.isFinite(length) || length < 0.01) return null;
+  const ux = dx / length,
+    uz = dz / length;
+  const start = {
+    x: wall.x1 + ux * door.offset,
+    z: wall.z1 + uz * door.offset,
+  };
+  const end = { x: start.x + ux * door.width, z: start.z + uz * door.width };
+  const hinge = door.hinge === 'end' ? end : start;
+  return {
+    wall,
+    length,
+    angle: (Math.atan2(dz, dx) * 180) / Math.PI,
+    start,
+    end,
+    hinge,
+    leafEnd: {
+      x: hinge.x - uz * door.width * door.swing,
+      z: hinge.z + ux * door.width * door.swing,
+    },
+  };
+}
+
+// 所属IDではなく物理座標で照合し、隣室側・逆向きの追加壁にも同じ開口を設ける。
+export function getWallDoorOpenings(plan: PlanDocument, wall: Wall) {
+  const length = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1);
+  if (length < 0.01) return [];
+  const ux = (wall.x2 - wall.x1) / length,
+    uz = (wall.z2 - wall.z1) / length;
+  const openings: { door: Door; start: number; end: number }[] = [];
+  for (const door of plan.doors) {
+    const geometry = getDoorGeometry(plan, door);
+    if (!geometry) continue;
+    const points = [geometry.start, geometry.end];
+    if (
+      points.some(
+        (p) => Math.abs((p.x - wall.x1) * uz - (p.z - wall.z1) * ux) > 0.001,
+      )
+    )
+      continue;
+    const positions = points.map(
+      (p) => (p.x - wall.x1) * ux + (p.z - wall.z1) * uz,
+    );
+    const start = Math.max(0, Math.min(...positions));
+    const end = Math.min(length, Math.max(...positions));
+    if (end - start > 0.001) openings.push({ door, start, end });
+  }
+  return openings.sort((a, b) => a.start - b.start);
+}
+
+// 共有壁の照合と配置候補を同じ一覧から作り、部屋外周の一辺だけが検証から漏れることを防ぐ。
+function doorHosts(plan: PlanDocument): DoorHost[] {
+  return [
+    ...plan.walls.map((wall): DoorHost => ({ kind: 'wall', id: wall.id })),
+    ...plan.rooms.flatMap((room) =>
+      (['north', 'east', 'south', 'west'] as const).map(
+        (side): DoorHost => ({ kind: 'room', id: room.id, side }),
+      ),
+    ),
+  ];
+}
+
+// 保存・配置・プロパティ変更で同じ制約を使う。枠のため両端と扉間に10cmの余白を残す。
+export function doorIsValid(plan: PlanDocument, door: Door): boolean {
+  if (
+    !door ||
+    ![door.offset, door.width, door.height].every(Number.isFinite) ||
+    door.width < 0.6 ||
+    door.width > 1.8 ||
+    door.height < 1.8 ||
+    door.height > 2.6 ||
+    !['start', 'end'].includes(door.hinge) ||
+    (door.swing !== 1 && door.swing !== -1)
+  )
+    return false;
+  const geometry = getDoorGeometry(plan, door);
+  if (
+    !geometry ||
+    door.offset < 0.1 - 0.0001 ||
+    door.offset + door.width > geometry.length - 0.1 + 0.0001 ||
+    door.height > geometry.wall.height - 0.1 + 0.0001
+  )
+    return false;
+  // T字・十字の接続壁が開口を横切ると3Dに壁が残る。線分の交点をmへ射影し、厚み分も検証する。
+  const ux = (geometry.wall.x2 - geometry.wall.x1) / geometry.length;
+  const uz = (geometry.wall.z2 - geometry.wall.z1) / geometry.length;
+  for (const host of doorHosts(plan)) {
+    const other = getDoorWall(plan, host)!;
+    const otherLength = Math.hypot(other.x2 - other.x1, other.z2 - other.z1);
+    if (otherLength < 0.01) continue;
+    const vx = (other.x2 - other.x1) / otherLength;
+    const vz = (other.z2 - other.z1) / otherLength;
+    const cross = ux * vz - uz * vx;
+    // 同一直線の共有壁はgetWallDoorOpeningsで一緒に開口するため、遮る壁としては扱わない。
+    if (Math.abs(cross) < 0.0001) continue;
+    const dx = other.x1 - geometry.wall.x1;
+    const dz = other.z1 - geometry.wall.z1;
+    const along = (dx * vz - dz * vx) / cross;
+    const across = (dx * uz - dz * ux) / cross;
+    const padding = other.thickness / (2 * Math.abs(cross));
+    if (
+      across >= -0.001 &&
+      across <= otherLength + 0.001 &&
+      along + padding > door.offset + 0.0001 &&
+      along - padding < door.offset + door.width - 0.0001
+    )
+      return false;
+  }
+  return !getWallDoorOpenings(plan, geometry.wall).some(
+    (opening) =>
+      opening.door.id !== door.id &&
+      door.offset < opening.end + 0.1 - 0.0001 &&
+      door.offset + door.width > opening.start - 0.1 + 0.0001,
+  );
+}
+
+// クリック位置を開口中心として最寄りの壁へ射影する。壁から35cm以上離れた入力は拒否する。
+export function findDoorPlacement(
+  plan: PlanDocument,
+  point: { x: number; z: number },
+  template?: Door,
+): Door | null {
+  if (![point.x, point.z].every(Number.isFinite)) return null;
+  const hosts = doorHosts(plan);
+  const candidates: { door: Door; distance: number }[] = [];
+  for (const host of hosts) {
+    const wall = getDoorWall(plan, host)!;
+    const length = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1);
+    if (length < 0.01) continue;
+    const ux = (wall.x2 - wall.x1) / length,
+      uz = (wall.z2 - wall.z1) / length;
+    const projection = (point.x - wall.x1) * ux + (point.z - wall.z1) * uz;
+    const onSegment = clamp(projection, 0, length);
+    const distance = Math.hypot(
+      point.x - wall.x1 - ux * onSegment,
+      point.z - wall.z1 - uz * onSegment,
+    );
+    if (distance > 0.35) continue;
+    const width = template?.width ?? 0.9;
+    if (length < width + 0.2 - 0.0001) continue;
+    const door: Door = {
+      id: '',
+      width,
+      height: 2,
+      hinge: 'start',
+      swing: 1,
+      ...template,
+      host,
+      // 10cm刻みへの丸め後にも壁端の余白を守り、短い壁への配置を破損させない。
+      offset: clamp(snap(projection - width / 2), 0.1, length - width - 0.1),
+    };
+    if (doorIsValid(plan, door)) candidates.push({ door, distance });
+  }
+  candidates.sort((a, b) => a.distance - b.distance);
+  return candidates[0]?.door ?? null;
+}
+
 export function createInitialPlan(): PlanDocument {
   // 起動直後から両ビューの関係を試せる、編集可能なサンプル間取り。
   return {
@@ -243,6 +474,7 @@ export function createInitialPlan(): PlanDocument {
       },
     ],
     walls: [],
+    doors: [],
     furniture: [
       {
         id: 'sofa-1',
@@ -356,6 +588,14 @@ export function createInitialPlan(): PlanDocument {
 export function parsePlan(raw: string): PlanDocument | null {
   try {
     const plan = JSON.parse(raw) as PlanDocument;
+    // v1保存には扉配列がない。明示的なnull等は破損として扱い、未定義だけ移行する。
+    if (
+      plan &&
+      typeof plan === 'object' &&
+      !Array.isArray(plan) &&
+      plan.doors === undefined
+    )
+      plan.doors = [];
     const validColor = (value: unknown) =>
       typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
     if (
@@ -363,15 +603,20 @@ export function parsePlan(raw: string): PlanDocument | null {
       typeof plan.name !== 'string' ||
       !Array.isArray(plan.rooms) ||
       !Array.isArray(plan.walls) ||
+      !Array.isArray(plan.doors) ||
       !Array.isArray(plan.furniture) ||
       plan.rooms.length > PLAN_LIMITS.rooms ||
       plan.walls.length > PLAN_LIMITS.walls ||
+      plan.doors.length > PLAN_LIMITS.doors ||
       plan.furniture.length > PLAN_LIMITS.furniture
     )
       return null;
-    const ids = [...plan.rooms, ...plan.walls, ...plan.furniture].map(
-      (item) => item?.id,
-    );
+    const ids = [
+      ...plan.rooms,
+      ...plan.walls,
+      ...plan.doors,
+      ...plan.furniture,
+    ].map((item) => item?.id);
     if (
       ids.some((id) => typeof id !== 'string') ||
       new Set(ids).size !== ids.length
@@ -422,6 +667,7 @@ export function parsePlan(raw: string): PlanDocument | null {
       )
     )
       return null;
+    if (!plan.doors.every((door) => doorIsValid(plan, door))) return null;
     return plan;
   } catch {
     return null;

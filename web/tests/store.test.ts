@@ -1,6 +1,10 @@
 // UIを描画せずにZustandの公開操作を呼び、編集・選択・履歴の整合性を確認する。
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createInitialPlan, type PlanDocument } from '../app/lib/model';
+import {
+  createInitialPlan,
+  type Door,
+  type PlanDocument,
+} from '../app/lib/model';
 import { useEditor } from '../app/lib/store';
 
 // 各テストで履歴と選択を初期化し、同じストアを使うテスト同士の干渉を防ぐ。
@@ -125,5 +129,106 @@ describe('選択状態と履歴の分離', () => {
     useEditor.getState().setSelected(selectedId);
     useEditor.getState().redo();
     expect(useEditor.getState().selectedId).toBeNull();
+  });
+});
+
+// 安定した扉IDと壁への参照を履歴に保持し、復元後に別の扉として扱われないことを確認する。
+function roomDoor(): Door {
+  return {
+    id: 'door-living',
+    host: { kind: 'room', id: 'living', side: 'north' },
+    offset: 1,
+    width: 0.9,
+    height: 2,
+    hinge: 'start',
+    swing: 1,
+  };
+}
+
+describe('扉の履歴と選択', () => {
+  it('扉の追加・幅と開き方の編集・削除を元のIDと壁参照でUndo/Redoする', () => {
+    const initial = useEditor.getState().plan;
+    const door = roomDoor();
+    const added = { ...initial, doors: [door] };
+    const changed = {
+      ...added,
+      doors: [
+        {
+          ...door,
+          offset: 2,
+          width: 1.2,
+          height: 2.1,
+          hinge: 'end' as const,
+          swing: -1 as const,
+        },
+      ],
+    };
+    const deleted = { ...changed, doors: [] };
+    for (const plan of [added, changed, deleted])
+      useEditor.getState().commit(plan);
+    expect(useEditor.getState().past).toHaveLength(3);
+    for (const plan of [changed, added, initial]) {
+      useEditor.getState().undo();
+      expect(useEditor.getState().plan).toEqual(plan);
+    }
+    for (const plan of [added, changed, deleted]) {
+      useEditor.getState().redo();
+      expect(useEditor.getState().plan).toEqual(plan);
+    }
+  });
+
+  it('選択中の扉が消える確定操作で選択を解除し、Undoでは扉だけを復元する', () => {
+    const door = roomDoor();
+    useEditor
+      .getState()
+      .commit({ ...useEditor.getState().plan, doors: [door] });
+    useEditor.getState().setSelected(door.id);
+    useEditor.getState().commit({ ...useEditor.getState().plan, doors: [] });
+    expect(useEditor.getState().selectedId).toBeNull();
+    useEditor.getState().undo();
+    expect(useEditor.getState().plan.doors).toEqual([door]);
+    expect(useEditor.getState().selectedId).toBeNull();
+  });
+
+  it('扉が存在する間は他の編集を確定してもその選択を維持する', () => {
+    const door = roomDoor();
+    useEditor
+      .getState()
+      .commit({ ...useEditor.getState().plan, doors: [door] });
+    useEditor.getState().setSelected(door.id);
+    useEditor.getState().commit(rename('扉のある家'));
+    expect(useEditor.getState().selectedId).toBe(door.id);
+    expect(useEditor.getState().plan.doors).toEqual([door]);
+  });
+
+  it('ホスト壁と扉を同時に削除した1操作をまとめて復元する', () => {
+    const wall = {
+      id: 'door-wall',
+      x1: 3,
+      z1: 5,
+      x2: 8,
+      z2: 5,
+      height: 2.4,
+      thickness: 0.1,
+    };
+    const door = {
+      ...roomDoor(),
+      host: { kind: 'wall' as const, id: wall.id },
+    };
+    const before = {
+      ...useEditor.getState().plan,
+      walls: [wall],
+      doors: [door],
+    };
+    useEditor.setState({ plan: before, selectedId: door.id });
+    // UIの連動削除が渡す完成文書を使い、履歴が壁と扉の間で分割されないことを検証する。
+    useEditor.getState().commit({ ...before, walls: [], doors: [] });
+    expect(useEditor.getState().past).toEqual([before]);
+    expect(useEditor.getState().selectedId).toBeNull();
+    useEditor.getState().undo();
+    expect(useEditor.getState().plan).toEqual(before);
+    useEditor.getState().redo();
+    expect(useEditor.getState().plan.walls).toEqual([]);
+    expect(useEditor.getState().plan.doors).toEqual([]);
   });
 });

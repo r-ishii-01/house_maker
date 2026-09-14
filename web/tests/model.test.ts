@@ -30,6 +30,7 @@ function fixture(): PlanDocument {
       },
     ],
     walls: [],
+    doors: [],
     furniture: [],
   };
 }

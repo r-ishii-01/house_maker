@@ -4,6 +4,7 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -32,6 +33,7 @@ import {
   Leaf,
   Home,
   Maximize2,
+  DoorOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -52,23 +54,37 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from '@/components/ui/alert-dialog';
-import FloorPlan, { FurnitureFootprint, type Tool } from './FloorPlan';
+import FloorPlan, {
+  FurnitureFootprint,
+  type PlanView,
+  type Tool,
+} from './FloorPlan';
+import SamplePlanPicker from './SamplePlanPicker';
 import {
   BOARD,
   PLAN_LIMITS,
   FURNITURE_CATALOG,
   catalogItem,
-  createInitialPlan,
   fitsFurniture,
   normalizeRotation,
   parsePlan,
   roomIsValid,
+  doorIsValid,
+  getDoorWall,
+  getPlanDisplayBounds,
+  clamp,
+  type Door,
   type FurnitureKind,
   type PlacedFurniture,
   type Room,
   type Wall,
 } from '../lib/model';
 import { useEditor } from '../lib/store';
+import {
+  SAMPLE_PLANS,
+  createSamplePlan,
+  type SamplePlanId,
+} from '../lib/samples';
 
 // 大きな3Dライブラリは必要になった段階で取得し、2D編集の初期表示を妨げない。
 const Scene3D = lazy(() => import('./Scene3D'));
@@ -84,15 +100,26 @@ const COLORS = [
   '#ece7db',
 ];
 type ViewMode = 'split' | '2d' | '3d';
+const MIN_PLAN_WIDTH = 4;
+
+// 表示は4:3で統一し、大きな保存プランも余白込みで収める。確定プランとは別のUI設定として扱う。
+function initialPlanView(bounds = { width: 16, depth: 12 }): PlanView {
+  const width = Math.min(
+    BOARD.width,
+    Math.max(bounds.width, (bounds.depth * 4) / 3),
+  );
+  return { x: 0, z: 0, width, depth: (width * 3) / 4 };
+}
 
 function NumericField({
   label,
   value,
   unit = 'm',
   min = 0,
-  max = 16,
+  max = BOARD.width,
   step = 0.1,
   onChange,
+  onInvalid,
 }: {
   label: string;
   value: number;
@@ -101,6 +128,7 @@ function NumericField({
   max?: number;
   step?: number;
   onChange: (value: number) => void;
+  onInvalid?: (message: string) => void;
 }) {
   // 入力途中の空文字を許容し、blur/Enter時に有限数と範囲を確認して確定する。
   const [draft, setDraft] = useState(String(value));
@@ -119,6 +147,8 @@ function NumericField({
       numeric <= max
     )
       onChange(numeric);
+    else
+      onInvalid?.(`${label}は${min}〜${max} ${unit}の数値で指定してください。`);
     setDraft(String(value));
   };
   return (
@@ -156,11 +186,20 @@ export default function HousePlanner() {
   const [tool, setTool] = useState<Tool>('select');
   const [pending, setPending] = useState<FurnitureKind | null>(null);
   const [wallMode, setWallMode] = useState<'full' | 'cutaway'>('cutaway');
+  // カメラの操作方法はこの画面だけの設定とし、プランの保存内容やUndo履歴には含めない。
+  const [cameraMode, setCameraMode] = useState<'rotate' | 'pan'>('rotate');
+  // FloorPlanのkeyは編集確定やキャンセルで変わるため、ズームと表示位置はここで保持する。
+  const [planView, setPlanView] = useState<PlanView>(() =>
+    initialPlanView(getPlanDisplayBounds(plan)),
+  );
+  const [planPanning, setPlanPanning] = useState(false);
   const [notice, setNotice] = useState(
     '家具を選んで、間取りの中に置いてみましょう。',
   );
   const [saved, setSaved] = useState<string | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
+  const [sampleOpen, setSampleOpen] = useState(false);
+  const sampleButtonRef = useRef<HTMLButtonElement>(null);
   const [category, setCategory] = useState('すべて');
   const [cameraKey, setCameraKey] = useState(0);
   const [canvasRevision, setCanvasRevision] = useState(0);
@@ -169,6 +208,8 @@ export default function HousePlanner() {
   );
   const selectedRoom = plan.rooms.find((room) => room.id === selectedId);
   const selectedWall = plan.walls.find((wall) => wall.id === selectedId);
+  const selectedDoor = plan.doors.find((door) => door.id === selectedId);
+  const doorWall = selectedDoor ? getDoorWall(plan, selectedDoor.host) : null;
   const area = plan.rooms.reduce(
     (total, room) => total + room.width * room.depth,
     0,
@@ -189,6 +230,7 @@ export default function HousePlanner() {
           selectedId: null,
         }); // oxlint-disable-next-line react/react-compiler -- ブラウザ保存領域との起動時同期は意図的な副作用。
         setSaved(JSON.stringify(restored));
+        setPlanView(initialPlanView(getPlanDisplayBounds(restored)));
         setNotice('このブラウザに保存した間取りを開きました。');
       } else
         setNotice(
@@ -203,22 +245,66 @@ export default function HousePlanner() {
 
   const chooseTool = (next: Tool) => {
     setTool(next);
+    setPlanPanning(false);
     setPending(null);
     setCanvasRevision((revision) => revision + 1);
-    if (next !== 'select')
+    if (next === 'room') setView('2d');
+    else if (next !== 'select')
       setView((current) => (current === '3d' ? 'split' : current));
     setNotice(
       next === 'room'
         ? '空いている場所をドラッグして部屋を作成します。最小サイズは1 × 1 mです。'
         : next === 'wall'
           ? '間取り上をドラッグして、間仕切り壁を引きます。'
-          : '家具をドラッグして移動。部屋や家具をクリックすると詳細を編集できます。',
+          : next === 'door'
+            ? '壁をクリックして扉を配置。図面にTabで移動すると矢印で10 cm、Shift＋矢印で50 cm移動、Enterで配置、Escでキャンセル。'
+            : '家具や扉をドラッグして移動。オブジェクトをクリックすると詳細を編集できます。',
     );
   };
   const selectObject = (id: string | null) => {
     setSelected(id);
+    setPlanPanning(false);
     setTool('select');
     setPending(null);
+  };
+
+  const loadSample = (id: SamplePlanId) => {
+    // ギャラリーの確定だけを1回の履歴にする。表示・配置待ちをリセットし、端末保存は保存ボタンに任せる。
+    const next = createSamplePlan(id);
+    commit(next);
+    setSelected(null);
+    chooseTool('select');
+    setPlanView(initialPlanView(getPlanDisplayBounds(next)));
+    setCameraKey((key) => key + 1);
+    setResetOpen(false);
+    setSampleOpen(false);
+    const sample = SAMPLE_PLANS.find((entry) => entry.id === id);
+    setNotice(
+      `「${sample?.name ?? next.name}」を開きました。「元に戻す」で前の間取りに戻れます。`,
+    );
+  };
+
+  const zoomPlan = (factor: number) => {
+    // 中心を保って拡縮し、最小4×3 mから敷地全体までに制限する。履歴や保存状態は変更しない。
+    setCanvasRevision((revision) => revision + 1);
+    setPlanView((current) => {
+      const width = clamp(current.width * factor, MIN_PLAN_WIDTH, BOARD.width);
+      const depth = (width * 3) / 4;
+      return {
+        x: clamp(
+          current.x + (current.width - width) / 2,
+          0,
+          BOARD.width - width,
+        ),
+        z: clamp(
+          current.z + (current.depth - depth) / 2,
+          0,
+          BOARD.depth - depth,
+        ),
+        width,
+        depth,
+      };
+    });
   };
 
   const updateFurniture = (id: string, changes: Partial<PlacedFurniture>) => {
@@ -268,16 +354,74 @@ export default function HousePlanner() {
       );
       return;
     }
+    // 扉は壁に対する距離を保持する。部屋を縮めた結果の端部不足や別の扉との衝突を先に検証する。
+    if (!next.doors.every((door) => doorIsValid(next, door))) {
+      setNotice(
+        '扉が壁に収まらないため変更できません。先に扉の位置や幅を調整してください。',
+      );
+      return;
+    }
     commit(next);
     setNotice('部屋の変更を2D・3Dに反映しました。');
   };
-  const updateWall = (id: string, changes: Partial<Wall>) =>
-    commit({
+  const updateWall = (id: string, changes: Partial<Wall>) => {
+    const next = {
       ...plan,
       walls: plan.walls.map((wall) =>
         wall.id === id ? { ...wall, ...changes } : wall,
       ),
-    });
+    };
+    // 壁を低くする場合も、扉上端から10 cmの余白を共有モデルの判定で守る。
+    if (!next.doors.every((door) => doorIsValid(next, door))) {
+      setNotice(
+        '扉が壁に収まらないため変更できません。壁の高さは扉より10 cm以上高くしてください。',
+      );
+      return;
+    }
+    commit(next);
+    setNotice('壁の変更を2D・3Dに反映しました。');
+  };
+  const addDoor = (candidate: Door | null) => {
+    if (plan.doors.length >= PLAN_LIMITS.doors) {
+      setNotice('扉は200個まで配置できます。');
+      return;
+    }
+    if (!candidate) {
+      setNotice(
+        '扉を配置できません。壁の交差部分を避け、壁端と他の扉から10 cm以上離れた位置を選んでください。',
+      );
+      return;
+    }
+    const door = { ...candidate, id: crypto.randomUUID() };
+    if (!doorIsValid(plan, door)) {
+      setNotice(
+        '扉が壁に収まりません。壁の交差部分を避け、幅・高さと周囲の余白を確認してください。',
+      );
+      return;
+    }
+    commit({ ...plan, doors: [...plan.doors, door] });
+    selectObject(door.id);
+    setNotice(
+      '扉を配置しました。ドラッグや右のプロパティで位置・開く方向を編集できます。',
+    );
+  };
+  const updateDoor = (id: string, changes: Partial<Door>) => {
+    const door = plan.doors.find((entry) => entry.id === id);
+    if (!door) return;
+    const updated = { ...door, ...changes };
+    const next = {
+      ...plan,
+      doors: plan.doors.map((entry) => (entry.id === id ? updated : entry)),
+    };
+    if (!doorIsValid(next, updated)) {
+      setNotice(
+        '扉を変更できません。壁の交差部分を避け、幅0.6〜1.8 m、高さ1.8〜2.6 m、壁端・壁上端・他の扉から10 cm以上の余白が必要です。',
+      );
+      return;
+    }
+    commit(next);
+    setNotice('扉の変更を2D・3Dに反映しました。');
+  };
   const addRoom = (bounds: {
     x: number;
     z: number;
@@ -300,7 +444,15 @@ export default function HousePlanner() {
       );
       return;
     }
-    commit({ ...plan, rooms: [...plan.rooms, room] });
+    const next = { ...plan, rooms: [...plan.rooms, room] };
+    // 新しい部屋の外周が既存扉の開口を横切る場合も、保存不可能なプランを生成しない。
+    if (!next.doors.every((door) => doorIsValid(next, door))) {
+      setNotice(
+        '既存の扉の開口を塞ぐため部屋を追加できません。扉や部屋の位置を調整してください。',
+      );
+      return;
+    }
+    commit(next);
     selectObject(room.id);
     setNotice('部屋を作成しました。右のプロパティで名前や寸法を編集できます。');
   };
@@ -325,7 +477,14 @@ export default function HousePlanner() {
       height: 2.6,
       thickness: 0.15,
     };
-    commit({ ...plan, walls: [...plan.walls, wall] });
+    const next = { ...plan, walls: [...plan.walls, wall] };
+    if (!next.doors.every((door) => doorIsValid(next, door))) {
+      setNotice(
+        '既存の扉の開口を塞ぐため壁を追加できません。扉や壁の位置を調整してください。',
+      );
+      return;
+    }
+    commit(next);
     selectObject(wall.id);
     setNotice('間仕切り壁を追加しました。');
   };
@@ -366,6 +525,10 @@ export default function HousePlanner() {
       ...plan,
       rooms: plan.rooms.filter((room) => room.id !== selectedId),
       walls: plan.walls.filter((wall) => wall.id !== selectedId),
+      // 部屋外周/追加壁の削除に追従させ、存在しないホストを参照する扉を残さない。
+      doors: plan.doors.filter(
+        (door) => door.id !== selectedId && door.host.id !== selectedId,
+      ),
       furniture,
     });
     setSelected(null);
@@ -409,10 +572,17 @@ export default function HousePlanner() {
       } else if (event.key === 'Escape') {
         chooseTool('select');
         setSelected(null);
-      } else if (event.key === 'Delete' || event.key === 'Backspace') {
+      } else if (
+        !planPanning &&
+        (event.key === 'Delete' || event.key === 'Backspace')
+      ) {
         event.preventDefault();
         removeSelection();
-      } else if (event.key.toLowerCase() === 'r' && selectedFurniture)
+      } else if (
+        !planPanning &&
+        event.key.toLowerCase() === 'r' &&
+        selectedFurniture
+      )
         updateFurniture(selectedFurniture.id, {
           rotation: normalizeRotation(selectedFurniture.rotation + 90),
         });
@@ -422,6 +592,7 @@ export default function HousePlanner() {
   });
   const beginFurniture = (kind: FurnitureKind) => {
     setCanvasRevision((revision) => revision + 1);
+    setPlanPanning(false);
     setPending(kind);
     setTool('furniture');
     if (view === '3d') setView('split');
@@ -460,6 +631,18 @@ export default function HousePlanner() {
             />
             {saved === currentSerialized ? '保存済み' : '編集中'}
           </span>
+          <Button
+            ref={sampleButtonRef}
+            variant="ghost"
+            className="sample-button"
+            aria-label="サンプル間取りを選ぶ"
+            aria-haspopup="dialog"
+            aria-expanded={sampleOpen}
+            onClick={() => setSampleOpen(true)}
+          >
+            <PanelsTopLeft />
+            サンプル
+          </Button>
           <Button
             variant="ghost"
             className="new-button"
@@ -634,19 +817,104 @@ export default function HousePlanner() {
                     <Minus />
                     <span>壁</span>
                   </Button>
+                  <Button
+                    aria-label="扉ツール"
+                    title="壁をクリックして扉を配置"
+                    variant="ghost"
+                    className={tool === 'door' ? 'active-tool' : ''}
+                    aria-pressed={tool === 'door'}
+                    onClick={() => chooseTool('door')}
+                  >
+                    <DoorOpen />
+                    <span>扉</span>
+                  </Button>
                 </div>
                 <div className="plan-canvas">
+                  <fieldset
+                    className="plan-navigation"
+                    aria-label="間取りの表示操作"
+                  >
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      aria-label="間取りを縮小"
+                      title="間取りを縮小"
+                      disabled={planView.width >= BOARD.width}
+                      onClick={() => zoomPlan(1.25)}
+                    >
+                      <Minus />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      aria-label="間取りを拡大"
+                      title="間取りを拡大"
+                      disabled={planView.width <= MIN_PLAN_WIDTH}
+                      onClick={() => zoomPlan(0.8)}
+                    >
+                      <Plus />
+                    </Button>
+                    <Button
+                      variant={planPanning ? 'default' : 'outline'}
+                      aria-label="間取りの表示を移動"
+                      aria-pressed={planPanning}
+                      title="ドラッグで表示を移動。図面上の矢印キーで1 m、Shift＋矢印で5 m移動"
+                      onClick={() => {
+                        setCanvasRevision((revision) => revision + 1);
+                        setPlanPanning((current) => !current);
+                        setNotice(
+                          planPanning
+                            ? '表示移動を終了しました。選択中の作図ツールを使えます。'
+                            : '図面をドラッグして表示を移動。図面にTabで移動し、矢印キーでも操作できます。',
+                        );
+                      }}
+                    >
+                      <Move />
+                      移動
+                    </Button>
+                    <Button
+                      variant="outline"
+                      aria-label="敷地全体を表示"
+                      title={`${BOARD.width} × ${BOARD.depth} mの敷地全体を表示`}
+                      onClick={() => {
+                        setCanvasRevision((revision) => revision + 1);
+                        setPlanView({
+                          x: 0,
+                          z: 0,
+                          width: BOARD.width,
+                          depth: BOARD.depth,
+                        });
+                        setNotice(
+                          `敷地全体 ${BOARD.width} × ${BOARD.depth} mを表示しています。`,
+                        );
+                      }}
+                    >
+                      <Maximize2 />
+                      敷地全体
+                    </Button>
+                  </fieldset>
                   <FloorPlan
                     key={`${canvasRevision}-${currentSerialized}`}
                     plan={plan}
                     selectedId={selectedId}
                     tool={tool}
                     pending={pending}
+                    view={planView}
+                    panning={planPanning}
+                    onViewChange={setPlanView}
                     onSelect={selectObject}
                     onPlace={addFurniture}
                     onRoom={addRoom}
                     onWall={addWall}
                     onMove={(id, position) => updateFurniture(id, position)}
+                    onDoor={addDoor}
+                    onDoorMove={(door) => {
+                      if (door) updateDoor(door.id, door);
+                      else
+                        setNotice(
+                          '扉を移動できません。壁の交差部分を避け、壁端や他の扉から10 cm以上離れた位置を選んでください。',
+                        );
+                    }}
                   />
                 </div>
                 <div className="viewport-footer">
@@ -654,9 +922,16 @@ export default function HousePlanner() {
                     <Ruler size={14} />
                     グリッド 50 cm · スナップ 10 cm
                   </span>
+                  <span className="plan-range" aria-label="間取りの表示範囲">
+                    X {planView.x.toFixed(1)}–
+                    {(planView.x + planView.width).toFixed(1)} m · Z{' '}
+                    {planView.z.toFixed(1)}–
+                    {(planView.z + planView.depth).toFixed(1)} m （敷地{' '}
+                    {BOARD.width} × {BOARD.depth} m）
+                  </span>
                   <span className="north-mark">N ↑</span>
                 </div>
-                {pending && (
+                {!planPanning && pending && (
                   <div className="placement-banner">
                     <Armchair size={16} />
                     {catalogItem(pending).name}を配置
@@ -664,6 +939,20 @@ export default function HousePlanner() {
                       size="icon-sm"
                       variant="ghost"
                       aria-label="配置をキャンセル"
+                      onClick={() => chooseTool('select')}
+                    >
+                      <X />
+                    </Button>
+                  </div>
+                )}
+                {!planPanning && tool === 'door' && (
+                  <div className="placement-banner">
+                    <DoorOpen size={16} />
+                    壁をクリックして扉を配置
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label="扉の配置をキャンセル"
                       onClick={() => chooseTool('select')}
                     >
                       <X />
@@ -701,10 +990,36 @@ export default function HousePlanner() {
                       selectedId={selectedId}
                       onSelect={selectObject}
                       wallMode={wallMode}
+                      cameraMode={cameraMode}
                     />
                   </Suspense>
                 </div>
                 <div className="scene-controls">
+                  <fieldset
+                    className="scene-navigation"
+                    aria-label="視点の操作"
+                  >
+                    <Button
+                      variant={cameraMode === 'rotate' ? 'default' : 'outline'}
+                      aria-label="視点を回転"
+                      aria-pressed={cameraMode === 'rotate'}
+                      title="左ドラッグ・1本指で回転（右ドラッグ・2本指で移動）"
+                      onClick={() => setCameraMode('rotate')}
+                    >
+                      <RotateCw />
+                      回転
+                    </Button>
+                    <Button
+                      variant={cameraMode === 'pan' ? 'default' : 'outline'}
+                      aria-label="視点を移動"
+                      aria-pressed={cameraMode === 'pan'}
+                      title="左ドラッグ・1本指で移動（右ドラッグ・2本指でも移動）"
+                      onClick={() => setCameraMode('pan')}
+                    >
+                      <Move />
+                      移動
+                    </Button>
+                  </fieldset>
                   <label htmlFor="cutaway-walls">
                     <Switch
                       id="cutaway-walls"
@@ -729,7 +1044,8 @@ export default function HousePlanner() {
                 <div className="viewport-footer">
                   <span>
                     <Move size={14} />
-                    ドラッグで回転 · ホイールでズーム
+                    ドラッグで{cameraMode === 'pan' ? '移動' : '回転'} ·
+                    ホイールでズーム
                   </span>
                   <span>透視図</span>
                 </div>
@@ -743,7 +1059,8 @@ export default function HousePlanner() {
             </output>
             <span className="object-count">
               {plan.rooms.length} 部屋<span>·</span>
-              {plan.furniture.length} 家具
+              {plan.furniture.length} 家具<span>·</span>
+              {plan.doors.length} 扉
             </span>
           </footer>
         </section>
@@ -759,7 +1076,9 @@ export default function HousePlanner() {
                     ? '部屋の詳細'
                     : selectedWall
                       ? '壁の詳細'
-                      : 'プランの概要'}
+                      : selectedDoor
+                        ? '扉の詳細'
+                        : 'プランの概要'}
               </h2>
             </div>
             <Ruler size={19} />
@@ -875,6 +1194,121 @@ export default function HousePlanner() {
                 </div>
               </div>
             </>
+          ) : selectedDoor && doorWall ? (
+            <>
+              <div className="selection-title">
+                <h3>開き戸</h3>
+                <span>
+                  {selectedDoor.host.kind === 'room'
+                    ? `${plan.rooms.find((room) => room.id === selectedDoor.host.id)?.name ?? '部屋'}・${{ north: '北', east: '東', south: '南', west: '西' }[selectedDoor.host.side]}側の壁`
+                    : '間仕切り壁'}
+                </span>
+              </div>
+              <div className="inspector-section">
+                <h4>開口のサイズ</h4>
+                <div className="field-grid">
+                  <NumericField
+                    key={`${selectedDoor.id}-width`}
+                    label="扉の幅"
+                    min={0.6}
+                    max={1.8}
+                    value={selectedDoor.width}
+                    onChange={(width) => updateDoor(selectedDoor.id, { width })}
+                    onInvalid={setNotice}
+                  />
+                  <NumericField
+                    key={`${selectedDoor.id}-height`}
+                    label="扉の高さ"
+                    min={1.8}
+                    max={2.6}
+                    value={selectedDoor.height}
+                    onChange={(height) =>
+                      updateDoor(selectedDoor.id, { height })
+                    }
+                    onInvalid={setNotice}
+                  />
+                </div>
+                <p className="inspector-note">
+                  幅0.6〜1.8 m、高さ1.8〜2.6 m。壁上端には10
+                  cm以上の余白が必要です。
+                </p>
+              </div>
+              <div className="inspector-section">
+                <h4>壁沿いの位置</h4>
+                <NumericField
+                  key={`${selectedDoor.id}-offset`}
+                  label="壁沿いの位置"
+                  min={0.1}
+                  max={Number(
+                    (
+                      Math.hypot(
+                        doorWall.x2 - doorWall.x1,
+                        doorWall.z2 - doorWall.z1,
+                      ) -
+                      selectedDoor.width -
+                      0.1
+                    ).toFixed(8),
+                  )}
+                  value={selectedDoor.offset}
+                  onChange={(offset) => updateDoor(selectedDoor.id, { offset })}
+                  onInvalid={setNotice}
+                />
+                <p className="inspector-note">
+                  壁の始点（X {doorWall.x1.toFixed(1)} m・Z{' '}
+                  {doorWall.z1.toFixed(1)}{' '}
+                  m）から開口までの距離。壁端・他の扉から10 cm以上離します。
+                </p>
+              </div>
+              <div className="inspector-section">
+                <h4>吊元</h4>
+                <fieldset className="field-grid" aria-label="吊元">
+                  <Button
+                    variant={
+                      selectedDoor.hinge === 'start' ? 'default' : 'outline'
+                    }
+                    aria-pressed={selectedDoor.hinge === 'start'}
+                    onClick={() =>
+                      updateDoor(selectedDoor.id, { hinge: 'start' })
+                    }
+                  >
+                    始点側
+                  </Button>
+                  <Button
+                    variant={
+                      selectedDoor.hinge === 'end' ? 'default' : 'outline'
+                    }
+                    aria-pressed={selectedDoor.hinge === 'end'}
+                    onClick={() =>
+                      updateDoor(selectedDoor.id, { hinge: 'end' })
+                    }
+                  >
+                    終点側
+                  </Button>
+                </fieldset>
+              </div>
+              <div className="inspector-section">
+                <h4>開く方向</h4>
+                <fieldset className="field-grid" aria-label="開く方向">
+                  <Button
+                    variant={selectedDoor.swing === 1 ? 'default' : 'outline'}
+                    aria-pressed={selectedDoor.swing === 1}
+                    onClick={() => updateDoor(selectedDoor.id, { swing: 1 })}
+                  >
+                    正方向
+                  </Button>
+                  <Button
+                    variant={selectedDoor.swing === -1 ? 'default' : 'outline'}
+                    aria-pressed={selectedDoor.swing === -1}
+                    onClick={() => updateDoor(selectedDoor.id, { swing: -1 })}
+                  >
+                    反対方向
+                  </Button>
+                </fieldset>
+                <p className="inspector-note">
+                  図面の円弧が扉の開く範囲です。開いた扉の線をドラッグして位置を調整できます。
+                </p>
+              </div>
+            </>
           ) : selectedRoom ? (
             <>
               <div className="inspector-section">
@@ -918,6 +1352,7 @@ export default function HousePlanner() {
                 <div className="field-grid">
                   <NumericField
                     label="部屋のX座標"
+                    max={BOARD.width}
                     value={selectedRoom.x}
                     onChange={(x) => updateRoom(selectedRoom.id, { x })}
                   />
@@ -951,7 +1386,7 @@ export default function HousePlanner() {
                 </div>
               </div>
               <p className="inspector-note">
-                部屋を移動すると、室内の家具も一緒に移動します。
+                部屋を移動すると、室内の家具と外周の扉も一緒に移動します。
               </p>
             </>
           ) : selectedWall ? (
@@ -1041,11 +1476,21 @@ export default function HousePlanner() {
           {selectedId && (
             <div className="delete-section">
               {selectedRoom && (
-                <p>部屋を削除すると、室内の家具も削除されます。</p>
+                <p>部屋を削除すると、室内の家具と外周の扉も削除されます。</p>
+              )}
+              {selectedWall && (
+                <p>壁を削除すると、その壁の扉も削除されます。</p>
               )}
               <Button variant="destructive" onClick={removeSelection}>
                 <Trash2 />
-                選択した{selectedRoom ? '部屋' : selectedWall ? '壁' : '家具'}
+                選択した
+                {selectedRoom
+                  ? '部屋'
+                  : selectedWall
+                    ? '壁'
+                    : selectedDoor
+                      ? '扉'
+                      : '家具'}
                 を削除
               </Button>
             </div>
@@ -1057,7 +1502,7 @@ export default function HousePlanner() {
                 操作ガイド
               </DialogTrigger>
               <DialogContent className="help-dialog">
-                <DialogTitle>間取りをつくる、4つの操作</DialogTitle>
+                <DialogTitle>間取りをつくる、5つの操作</DialogTitle>
                 <DialogDescription>
                   間取りと3Dビューは、同じプランを表示しています。
                 </DialogDescription>
@@ -1065,6 +1510,12 @@ export default function HousePlanner() {
                   <li>
                     <strong>部屋を描く</strong>
                     「部屋」ツールでドラッグ。右側で名前や寸法を調整できます。
+                  </li>
+                  <li>
+                    <strong>扉を付ける</strong>
+                    「扉」ツールで壁をクリック。図面にTabで移動し、矢印キーで10
+                    cm（Shiftと同時で50
+                    cm）ずつ位置を調整、Enterでも配置できます。ドラッグで移動し、右側で幅・高さ・吊元・開く方向を編集できます。
                   </li>
                   <li>
                     <strong>家具を置く</strong>
@@ -1076,7 +1527,7 @@ export default function HousePlanner() {
                   </li>
                   <li>
                     <strong>3Dで確認する</strong>
-                    ドラッグで回転、ホイールでズーム。壁の高さを切り替えて確認できます。
+                    「回転」「移動」で左ドラッグ・1本指の操作を切り替えます。右ドラッグでも移動でき、ホイールでズーム、2本指で移動・ピンチでズームできます。壁の高さも切り替えて確認できます。
                   </li>
                 </ol>
                 <p>
@@ -1092,8 +1543,14 @@ export default function HousePlanner() {
           </div>
         </aside>
       </div>
+      <SamplePlanPicker
+        open={sampleOpen}
+        onOpenChange={setSampleOpen}
+        onLoad={loadSample}
+        returnFocusRef={sampleButtonRef}
+      />
       <AlertDialog open={resetOpen} onOpenChange={setResetOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent finalFocus={sampleOpen ? false : undefined}>
           <AlertDialogTitle>新しい間取りを作成</AlertDialogTitle>
           <AlertDialogDescription>
             編集中のプランを空にします。作成後も「元に戻す」で現在のプランを復元できます。
@@ -1106,26 +1563,30 @@ export default function HousePlanner() {
                   name: '新しい住まい',
                   rooms: [],
                   walls: [],
+                  doors: [],
                   furniture: [],
                 });
                 setSelected(null);
                 chooseTool('room');
+                setPlanView(initialPlanView());
                 setResetOpen(false);
               }}
             >
               空のプランを作成
             </AlertDialogAction>
           </AlertDialogFooter>
+          <Button variant="ghost" onClick={() => loadSample('airy-home')}>
+            サンプル間取りに戻す
+          </Button>
           <Button
-            variant="ghost"
+            variant="outline"
             onClick={() => {
-              commit(createInitialPlan());
-              setSelected(null);
-              chooseTool('select');
+              // 古いモーダルへのフォーカス復元を抑え、比較ダイアログに入力先を移す。
               setResetOpen(false);
+              setSampleOpen(true);
             }}
           >
-            サンプル間取りに戻す
+            サンプルを選ぶ
           </Button>
         </AlertDialogContent>
       </AlertDialog>
