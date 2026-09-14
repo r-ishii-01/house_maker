@@ -61,6 +61,7 @@ Vercel版は `npm run dev:vercel` で開発、`npm run build:vercel` で静的�
 各自作コードファイルに日本語の処理・設計意図コメントを記載しています。コメントを許さないJSONについては以下で意図を説明します。
 
 - `web/package.json` / `package-lock.json`：依存関係と再現可能なバージョン、起動・検証コマンド。
+- `vercel.json`：GitHub連携はリポジトリ直下から開始するため、`web`のロックファイルで依存関係を導入し、`web/dist-vercel`を配信。`web/vercel.json`は`web`内からのCLI実行用。
 - `web/tsconfig.json`：厳密な型検査とパス別名。
 - `web/.oxlintrc.json`：自作コードを検査。変更していない生成済みUIカタログと生成キャッシュは対象外。
 - `web/.openai/hosting.json`：Sitesのプロジェクト識別。DB・オブジェクトストレージは使用しない。
