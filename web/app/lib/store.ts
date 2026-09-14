@@ -27,6 +27,15 @@ export const useEditor = create<EditorState>((set) => ({
             plan: next,
             past: [...state.past, state.plan].slice(-100),
             future: [],
+            // 所属壁と扉の同時削除でも、消失した対象をプロパティUIに残さない。
+            selectedId: [
+              ...next.rooms,
+              ...next.walls,
+              ...next.doors,
+              ...next.furniture,
+            ].some((item) => item.id === state.selectedId)
+              ? state.selectedId
+              : null,
           },
     ),
   undo: () =>

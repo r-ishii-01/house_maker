@@ -549,13 +549,59 @@ button {
 }
 .floor-plan.tool-room,
 .floor-plan.tool-wall,
+.floor-plan.tool-door,
 .floor-plan.tool-furniture {
   cursor: crosshair;
 }
-.plan-furniture {
+.plan-furniture,
+.plan-door {
   cursor: grab;
 }
-.plan-furniture:active {
+.plan-furniture:active,
+.plan-door:active {
+  cursor: grabbing;
+}
+/* 表示操作は編集ツールの下にまとめ、倍率や移動モードを変えても作図データには触れない。 */
+.plan-navigation {
+  position: absolute;
+  z-index: 4;
+  top: 112px;
+  left: 22px;
+  right: 22px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.plan-navigation button {
+  height: 32px;
+  gap: 5px;
+  padding: 0 9px;
+  background: #ffffffed;
+  border: 1px solid #dfe5dc;
+  color: #577561;
+  font-size: 12px;
+}
+.plan-navigation button[aria-pressed='true'] {
+  background: #e7f2eb;
+  border-color: #729980;
+  color: #276c55;
+}
+.plan-range {
+  display: block;
+  color: #637b6c;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.floor-plan.is-panning,
+.floor-plan.is-panning * {
+  cursor: grab;
+}
+.floor-plan.is-panning:active,
+.floor-plan.is-panning:active * {
   cursor: grabbing;
 }
 .ruler-label {
@@ -651,6 +697,8 @@ button {
   left: 22px;
   right: 22px;
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: space-between;
   align-items: center;
   z-index: 4;
@@ -670,6 +718,34 @@ button {
   background: #ffffffc9;
   border-color: #dfe5dc;
   color: #668471;
+}
+/* 視点の操作は画面幅に応じて折り返し、押されたモードを色と枠で示す。 */
+.scene-navigation {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.scene-navigation button {
+  gap: 5px;
+  padding-inline: 9px;
+  background: #ffffffdb;
+  border-color: #dfe5dc;
+  color: #577561;
+}
+.scene-navigation button[aria-pressed='true'] {
+  background: #e7f2eb;
+  border-color: #729980;
+  color: #276c55;
+}
+.scene-viewport .viewport-footer > span:first-child {
+  min-width: 0;
+}
+.scene-viewport .viewport-footer > span:last-child,
+.scene-viewport .viewport-footer svg {
+  flex-shrink: 0;
 }
 .scene-loading {
   width: 100%;
@@ -1079,6 +1155,188 @@ button {
     padding-right: 18px;
   }
 }
+/* サンプルは実際の間取りを比較するカタログ。見出しと確定ボタンを固定し、候補だけをスクロールする。 */
+.sample-picker {
+  display: flex;
+  flex-direction: column;
+  width: min(960px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: min(920px, calc(100dvh - 40px));
+  padding: 24px;
+  gap: 18px;
+  overflow: hidden;
+}
+.sample-picker-header {
+  padding-right: 28px;
+  flex-shrink: 0;
+}
+.sample-picker-header h2 {
+  font-size: 21px;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+.sample-picker-header p {
+  line-height: 1.7;
+}
+.sample-picker-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.sample-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0;
+  padding: 4px;
+  border: 0;
+  min-width: 0;
+}
+.sample-card {
+  display: block;
+  position: relative;
+  min-width: 0;
+  border: 1px solid #dce4df;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  overflow: hidden;
+}
+.sample-card:hover {
+  border-color: #7d9c8e;
+}
+.sample-card[data-selected='true'] {
+  border-color: #2f776b;
+  box-shadow: inset 0 0 0 1px #2f776b;
+}
+.sample-card:focus-within {
+  outline: 2px solid #2f776b;
+  outline-offset: 2px;
+}
+.sample-card-radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.sample-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #f3f5f0;
+  border-bottom: 1px solid #e4e9e4;
+}
+.sample-card-body {
+  display: block;
+  padding: 13px 14px 15px;
+}
+.sample-card-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.sample-card-name {
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: #263637;
+}
+.sample-card-category {
+  display: inline-block;
+  align-self: flex-start;
+  color: #2f776b;
+  background: #edf4ee;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.sample-card-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 9px;
+  color: #4e6660;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.sample-card-description {
+  display: block;
+  margin: 7px 0 0;
+  color: #647474;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.sample-card-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: #fff;
+  background: #2f776b;
+  border-radius: 50%;
+}
+.sample-picker-footer {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e7e5;
+  flex-shrink: 0;
+}
+.sample-picker-hint {
+  flex: 1;
+  margin: 0;
+  color: #647474;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.sample-picker-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+@media (max-width: 760px) {
+  .sample-picker-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .sample-picker {
+    padding: 18px 14px;
+    gap: 12px;
+  }
+  .sample-picker-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sample-preview {
+    aspect-ratio: 16 / 9;
+  }
+  .sample-picker-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .sample-picker-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .header-actions .sample-button {
+    padding: 0 7px;
+    font-size: 12px;
+  }
+  .header-actions .sample-button svg {
+    display: none;
+  }
+  .main-header .brand-mark {
+    display: none;
+  }
+}
 @media (max-width: 1279px) {
   .studio-body {
     grid-template-columns: 205px minmax(0, 1fr) 225px;
@@ -1443,5 +1701,89 @@ button {
   }
   .view-tabs [role='tab'] svg {
     display: none;
+  }
+}
+/* 広い敷地のナビゲーション分だけ上余白を確保する。単独2Dは狭幅でも十分な作図高さを持たせる。 */
+.plan-canvas,
+.view-split .plan-canvas {
+  padding-top: 158px;
+  padding-bottom: 65px;
+}
+/* グリッド説明と表示範囲を別行にし、分割ビューでも狭い列へ押し込んで改行されないようにする。 */
+.plan-viewport .viewport-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+}
+.plan-viewport .viewport-footer > span:first-child,
+.plan-viewport .viewport-footer .plan-range {
+  grid-column: 1;
+}
+.plan-viewport .viewport-footer .north-mark {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+/* 2Dを単独表示する幅があれば操作列を横へ並べ、増えた横幅と高さを作図へ戻す。 */
+@media (min-width: 850px) {
+  .view-2d .plan-navigation {
+    top: 67px;
+    left: 310px;
+  }
+  .view-2d .plan-canvas {
+    padding-top: 112px;
+  }
+}
+@media (max-width: 1279px) {
+  .view-split .plan-navigation {
+    top: 101px;
+  }
+  .view-split .plan-canvas {
+    padding-top: 145px;
+    max-height: none;
+  }
+  .view-split {
+    grid-template-rows: minmax(400px, 1fr) minmax(370px, 1fr);
+  }
+}
+@media (max-width: 999px) {
+  .view-2d {
+    min-height: 560px;
+  }
+}
+@media (max-width: 640px) {
+  .plan-navigation {
+    left: 16px;
+    right: 16px;
+  }
+  .plan-navigation button {
+    padding-inline: 8px;
+  }
+  .view-split {
+    grid-template-rows: 400px 370px;
+  }
+}
+/* 小幅端末では文字のある3操作を残し、ロゴの余白を詰めてヘッダーの横スクロールを防ぐ。 */
+@media (max-width: 380px) {
+  .main-header {
+    padding-inline: 10px;
+    gap: 6px;
+  }
+  .main-header .brand {
+    font-size: 18px;
+  }
+  .header-actions .new-button {
+    font-size: 11px;
+    padding-inline: 4px;
+  }
+  .header-actions .new-button svg {
+    display: none;
+  }
+  .header-actions .sample-button {
+    font-size: 11px;
+    padding-inline: 6px;
+  }
+  .header-actions .save-button {
+    font-size: 11px;
+    padding-inline: 6px;
   }
 }

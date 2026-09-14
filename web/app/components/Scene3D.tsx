@@ -2,14 +2,26 @@
 
 /**
  * 2Dエディターと同じメートル単位のプランを、外部アセットを使わずに立体化するビュー。
- * 家具の中心座標・寸法・角度を共有するため、2Dでの変更がそのまま3Dに反映される。
+ * 家具と扉の座標・寸法・角度を共有し、部屋境界と追加壁にも同じ開口を反映する。
+ * 図面の水平・垂直座標をThree.jsのX/Z、高さをYへ対応させ、表示範囲から台座と視点を導く。
  */
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  type ComponentRef,
+} from 'react';
 import { useThree } from '@react-three/fiber';
-import { PerspectiveCamera } from 'three';
+import { MOUSE, Object3D, PerspectiveCamera, TOUCH } from 'three';
 import SceneCanvas, { SceneFallback } from './SceneCanvas';
+import Door3D from './Door3D';
 import { OrbitControls, RoundedBox } from '@react-three/drei';
-import { FURNITURE_CATALOG } from '../lib/model';
+import {
+  FURNITURE_CATALOG,
+  getPlanDisplayBounds,
+  getWallDoorOpenings,
+} from '../lib/model';
 import type {
   FurnitureKind,
   PlanDocument,
@@ -23,36 +35,68 @@ type Scene3DProps = {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   wallMode: 'full' | 'cutaway';
+  cameraMode: 'rotate' | 'pan';
 };
 
 // 縦長の分割ビューでも建物全体が画面に入るよう、狭い側の視野角からカメラ距離を決める。
-function CameraFraming() {
+function CameraFraming({
+  cameraMode,
+  width,
+  depth,
+}: {
+  cameraMode: Scene3DProps['cameraMode'];
+  width: number;
+  depth: number;
+}) {
   const { camera, size } = useThree();
+  const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
   const halfVerticalFov = (39 * Math.PI) / 360;
   const halfHorizontalFov = Math.atan(
     (Math.tan(halfVerticalFov) * size.width) / Math.max(size.height, 1),
   );
+  // 原点からの表示範囲を囲む半径を使う。16×12mでは半径10mとなり、既存の視点を維持する。
+  const radius = Math.hypot(width, depth) / 2;
+  const centerX = width / 2;
+  const centerZ = depth / 2;
   const distance =
-    (10 / Math.sin(Math.min(halfVerticalFov, halfHorizontalFov))) * 1.04;
+    (radius / Math.sin(Math.min(halfVerticalFov, halfHorizontalFov))) * 1.04;
+  // oxlint-disable-next-line react/react-compiler -- R3Fが所有する可変カメラとControlsを公開APIで同期する。
   useEffect(() => {
     const directionLength = Math.hypot(11, 18, 15);
     camera.position.set(
-      8 + (11 / directionLength) * distance,
+      centerX + (11 / directionLength) * distance,
       (18 / directionLength) * distance,
-      6 + (15 / directionLength) * distance,
+      centerZ + (15 / directionLength) * distance,
     );
-    camera.lookAt(8, 0, 6);
+    camera.lookAt(centerX, 0, centerZ);
+    // リサイズや表示寸法の変更だけで全体表示へ戻し、注視点をメートル単位の表示中央へ揃える。
+    // 寸法が同じ選択・家具移動・壁表示・操作モード変更では、利用者が移動した視点を保つ。
+    controls.current?.target.set(centerX, 0, centerZ);
+    controls.current?.update();
     // 細長い表示領域ではカメラが遠ざかるので、建物が遠方クリップ面で消えない距離も確保する。
     // Three.jsのカメラはR3Fが保持する可変オブジェクトであり、Reactの値とは別に投影行列を更新する。
     if (camera instanceof PerspectiveCamera)
       // oxlint-disable-next-line react/react-compiler -- R3Fの公開APIでカメラの投影を更新する。
       camera.far = Math.max(150, distance * 2 + 30);
     camera.updateProjectionMatrix();
-  }, [camera, distance]);
+  }, [camera, centerX, centerZ, distance, size.width, size.height]);
   return (
     <OrbitControls
+      ref={controls}
       makeDefault
-      target={[8, 0, 6]}
+      target={[centerX, 0, centerZ]}
+      // 画面に沿った上下左右の移動にし、左ドラッグと1本指の操作を同じモードへ揃える。
+      enablePan
+      screenSpacePanning
+      mouseButtons={{
+        LEFT: cameraMode === 'pan' ? MOUSE.PAN : MOUSE.ROTATE,
+        MIDDLE: MOUSE.DOLLY,
+        RIGHT: MOUSE.PAN,
+      }}
+      touches={{
+        ONE: cameraMode === 'pan' ? TOUCH.PAN : TOUCH.ROTATE,
+        TWO: TOUCH.DOLLY_PAN,
+      }}
       enableDamping
       dampingFactor={0.075}
       minDistance={8}
@@ -664,39 +708,94 @@ function RoomFloor({
   );
 }
 
-function CustomWall({
+/**
+ * 部屋境界と追加壁を共通の壁ローカル X 軸へ変換し、開口端点で壁と幅木を分割する。
+ * 扉の所属ではなく物理的に重なる区間を使うため、部屋間の共有壁にも穴が通る。
+ */
+function WallWithOpenings({
+  plan,
   wall,
   mode,
+  automatic = false,
   selected,
   onSelect,
 }: {
+  plan: PlanDocument;
   wall: Wall;
   mode: Scene3DProps['wallMode'];
+  automatic?: boolean;
   selected: boolean;
   onSelect: Scene3DProps['onSelect'];
 }) {
   const length = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1);
   if (length < 0.01) return null;
   const height = mode === 'cutaway' ? Math.min(wall.height, 0.55) : wall.height;
+  const openings = getWallDoorOpenings(plan, wall);
+  // 高さの違う開口が重なる場合も、各小区間の最大開口高を引いて重複した壁を残さない。
+  const points = [
+    ...new Set([
+      0,
+      length,
+      ...openings.flatMap(({ start, end }) => [start, end]),
+    ]),
+  ].sort((a, b) => a - b);
+  const wallColor = selected ? '#d8a37d' : automatic ? '#f4f1e8' : '#efece4';
   return (
     <group
-      position={[
-        (wall.x1 + wall.x2) / 2,
-        height / 2 + 0.04,
-        (wall.z1 + wall.z2) / 2,
-      ]}
+      position={[wall.x1, 0.04, wall.z1]}
       rotation={[0, -Math.atan2(wall.z2 - wall.z1, wall.x2 - wall.x1), 0]}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSelect(wall.id);
-      }}
+      onClick={
+        automatic
+          ? undefined
+          : (event) => {
+              event.stopPropagation();
+              onSelect(wall.id);
+            }
+      }
     >
-      <Solid
-        position={[0, 0, 0]}
-        size={[length, height, wall.thickness]}
-        color={selected ? '#d8a37d' : '#efece4'}
-        radius={0.012}
-      />
+      {points.slice(0, -1).map((start, index) => {
+        const end = points[index + 1];
+        if (end - start < 0.001) return null;
+        const midpoint = (start + end) / 2;
+        const openingHeight = Math.max(
+          0,
+          ...openings
+            .filter(
+              (opening) => opening.start < midpoint && opening.end > midpoint,
+            )
+            .map(({ door }) => door.height),
+        );
+        const bottom = Math.min(openingHeight, height);
+        const solidHeight = height - bottom;
+        // 自動壁の両端だけ厚みの半分を延ばして角を閉じ、開口の端には延長しない。
+        const from =
+          start - (automatic && index === 0 && openingHeight === 0 ? 0.07 : 0);
+        const to =
+          end +
+          (automatic && index === points.length - 2 && openingHeight === 0
+            ? 0.07
+            : 0);
+        return (
+          <group key={`${start}-${end}`}>
+            {solidHeight > 0.001 && (
+              <Solid
+                position={[(from + to) / 2, bottom + solidHeight / 2, 0]}
+                size={[to - from, solidHeight, wall.thickness]}
+                color={wallColor}
+                radius={0.012}
+              />
+            )}
+            {automatic && openingHeight === 0 && (
+              <Solid
+                position={[(from + to) / 2, 0.0425, 0]}
+                size={[to - from, 0.085, wall.thickness + 0.025]}
+                color="#dfdbcc"
+                radius={0.004}
+              />
+            )}
+          </group>
+        );
+      })}
     </group>
   );
 }
@@ -708,6 +807,7 @@ export default function Scene3D({
   selectedId,
   onSelect,
   wallMode,
+  cameraMode,
 }: Scene3DProps) {
   // SSRではfalse、ブラウザではtrueを返し、Canvasだけをハイドレーション後に作成する。
   const mounted = useSyncExternalStore(
@@ -716,14 +816,21 @@ export default function Scene3D({
     () => false,
   );
   const boundaries = useMemo(() => getRoomBoundaries(plan.rooms), [plan.rooms]);
-
-  const wallHeight = wallMode === 'cutaway' ? 0.55 : 2.6;
+  const { width, depth } = getPlanDisplayBounds(plan);
+  const centerX = width / 2;
+  const centerZ = depth / 2;
+  const radius = Math.hypot(width, depth) / 2;
+  // 光源と対象を同じ中心から置き、広い間取りでも光の方向を保って影を領域全体へ届ける。
+  // targetはシーンに追加してワールド座標を更新する。GPU資源を持たないObject3Dを再利用する。
+  const lightTarget = useMemo(() => new Object3D(), []);
+  const lightScale = radius / 10;
+  const shadowExtent = radius + 4;
 
   if (!mounted) return <SceneFallback loading />;
 
   return (
     <section
-      aria-label={`${plan.name}の3D表示。ドラッグで回転、ホイールで拡大縮小、家具をクリックして選択。`}
+      aria-label={`${plan.name}の3D表示。ドラッグで${cameraMode === 'pan' ? '移動' : '回転'}、右ドラッグで移動、ホイールで拡大縮小、家具や扉をクリックして選択。`}
       style={{ width: '100%', height: '100%', minHeight: 280 }}
     >
       <SceneCanvas onPointerMissed={() => onSelect(null)}>
@@ -731,34 +838,44 @@ export default function Scene3D({
         {/* 霧は使わず、ズームや画面比率によって家と家具が背景色へ消えることを防ぐ。 */}
         <ambientLight intensity={1.1} />
         <hemisphereLight args={['#fffaf0', '#bac3b3', 1.5]} />
+        <primitive object={lightTarget} position={[centerX, 0, centerZ]} />
         <directionalLight
-          position={[6, 16, 4]}
+          position={[
+            centerX + 6 * lightScale,
+            16 * lightScale,
+            centerZ + 4 * lightScale,
+          ]}
+          target={lightTarget}
           intensity={2.25}
           castShadow
           shadow-mapSize={[2048, 2048]}
-          shadow-camera-left={-14}
-          shadow-camera-right={14}
-          shadow-camera-top={14}
-          shadow-camera-bottom={-14}
+          shadow-camera-left={-shadowExtent}
+          shadow-camera-right={shadowExtent}
+          shadow-camera-top={shadowExtent}
+          shadow-camera-bottom={-shadowExtent}
+          shadow-camera-far={Math.max(50, radius * 4)}
+          // 影カメラは範囲プロパティの変更だけでは投影が更新されないため、Reactの更新時に同期する。
+          onUpdate={(light) => light.shadow.camera.updateProjectionMatrix()}
           shadow-normalBias={0.045}
           shadow-bias={-0.0002}
         />
         <directionalLight
-          position={[-9, 7, -5]}
+          position={[centerX - 9, 7, centerZ - 5]}
+          target={lightTarget}
           intensity={0.7}
           color="#e6eef0"
         />
         <mesh
           receiveShadow
           rotation={[-Math.PI / 2, 0, 0]}
-          position={[8, -0.29, 6]}
+          position={[centerX, -0.29, centerZ]}
         >
           <planeGeometry args={[180, 180]} />
           <meshStandardMaterial color="#eeeee7" roughness={1} />
         </mesh>
         <Solid
-          position={[8, -0.135, 6]}
-          size={[16.3, 0.28, 12.3]}
+          position={[centerX, -0.135, centerZ]}
+          size={[width + 0.3, 0.28, depth + 0.3]}
           color="#deded3"
           radius={0.1}
         />
@@ -770,48 +887,47 @@ export default function Scene3D({
             onSelect={onSelect}
           />
         ))}
-        {boundaries.map((wall) => {
-          const length = wall.end - wall.start;
-          if (length < 0.01) return null;
-          const horizontal = wall.axis === 'x';
+        {boundaries.map((boundary) => {
+          const horizontal = boundary.axis === 'x';
+          // 境界は常に x または z の増加方向へ向け、共有モデルと同じ開口距離に変換する。
+          const wall: Wall = {
+            id: `boundary-${boundary.axis}-${boundary.coordinate}-${boundary.start}`,
+            x1: horizontal ? boundary.start : boundary.coordinate,
+            z1: horizontal ? boundary.coordinate : boundary.start,
+            x2: horizontal ? boundary.end : boundary.coordinate,
+            z2: horizontal ? boundary.coordinate : boundary.end,
+            height: 2.6,
+            thickness: 0.14,
+          };
           return (
-            <group
-              key={`${wall.axis}-${wall.coordinate}-${wall.start}`}
-              position={
-                horizontal
-                  ? [(wall.start + wall.end) / 2, 0, wall.coordinate]
-                  : [wall.coordinate, 0, (wall.start + wall.end) / 2]
-              }
-            >
-              <Solid
-                position={[0, wallHeight / 2 + 0.035, 0]}
-                size={
-                  horizontal
-                    ? [length + 0.14, wallHeight, 0.14]
-                    : [0.14, wallHeight, length + 0.14]
-                }
-                color="#f4f1e8"
-                radius={0.015}
-              />
-              <Solid
-                position={[0, 0.083, 0]}
-                size={
-                  horizontal
-                    ? [length + 0.15, 0.085, 0.165]
-                    : [0.165, 0.085, length + 0.15]
-                }
-                color="#dfdbcc"
-                radius={0.004}
-              />
-            </group>
+            <WallWithOpenings
+              key={wall.id}
+              plan={plan}
+              wall={wall}
+              mode={wallMode}
+              automatic
+              selected={false}
+              onSelect={onSelect}
+            />
           );
         })}
         {plan.walls.map((wall) => (
-          <CustomWall
+          <WallWithOpenings
             key={wall.id}
+            plan={plan}
             wall={wall}
             mode={wallMode}
             selected={selectedId === wall.id}
+            onSelect={onSelect}
+          />
+        ))}
+        {plan.doors.map((door) => (
+          <Door3D
+            key={door.id}
+            plan={plan}
+            door={door}
+            wallMode={wallMode}
+            selected={selectedId === door.id}
             onSelect={onSelect}
           />
         ))}
@@ -823,7 +939,7 @@ export default function Scene3D({
             onSelect={onSelect}
           />
         ))}
-        <CameraFraming />
+        <CameraFraming cameraMode={cameraMode} width={width} depth={depth} />
       </SceneCanvas>
     </section>
   );
