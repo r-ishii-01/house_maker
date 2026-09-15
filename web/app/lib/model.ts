@@ -9,7 +9,19 @@ export type FurnitureKind =
   | 'desk'
   | 'bookshelf'
   | 'plant'
-  | 'television';
+  | 'television'
+  | 'loveseat'
+  | 'ottoman'
+  | 'side-table'
+  | 'round-dining-table'
+  | 'stool'
+  | 'single-bed'
+  | 'nightstand'
+  | 'wardrobe'
+  | 'dresser'
+  | 'office-chair'
+  | 'floor-lamp'
+  | 'kitchen-island';
 export interface Room {
   id: string;
   name: string;
@@ -188,6 +200,116 @@ export const FURNITURE_CATALOG: FurnitureDefinition[] = [
     depth: 0.65,
     height: 1.25,
     color: '#4f7b55',
+  },
+  // 種類ごとの実寸を一元化し、SVG・3D・回転後の配置可否・保存復元で同じ占有領域を使う。
+  // 既存の種類と寸法は変更せず、小型家具や収納を別の安定したkindとして追加する。
+  {
+    kind: 'loveseat',
+    name: '2人掛けソファ',
+    category: 'リビング',
+    width: 1.65,
+    depth: 0.85,
+    height: 0.8,
+    color: '#9aafa3',
+  },
+  {
+    kind: 'ottoman',
+    name: 'オットマン',
+    category: 'リビング',
+    width: 0.65,
+    depth: 0.55,
+    height: 0.42,
+    color: '#c5b6a3',
+  },
+  {
+    kind: 'side-table',
+    name: 'サイドテーブル',
+    category: 'リビング',
+    width: 0.45,
+    depth: 0.45,
+    height: 0.52,
+    color: '#b2926b',
+  },
+  {
+    kind: 'round-dining-table',
+    name: 'ラウンドダイニングテーブル',
+    category: 'ダイニング',
+    width: 1.1,
+    depth: 1.1,
+    height: 0.74,
+    color: '#c3a37d',
+  },
+  {
+    kind: 'stool',
+    name: 'スツール',
+    category: 'ダイニング',
+    width: 0.4,
+    depth: 0.4,
+    height: 0.45,
+    color: '#a88057',
+  },
+  {
+    kind: 'single-bed',
+    name: 'シングルベッド',
+    category: 'ベッドルーム',
+    width: 1,
+    depth: 2.1,
+    height: 0.9,
+    color: '#aebcc9',
+  },
+  {
+    kind: 'nightstand',
+    name: 'ナイトテーブル',
+    category: 'ベッドルーム',
+    width: 0.45,
+    depth: 0.4,
+    height: 0.5,
+    color: '#b2926b',
+  },
+  {
+    kind: 'wardrobe',
+    name: 'ワードローブ',
+    category: '収納',
+    width: 1.2,
+    depth: 0.6,
+    height: 2,
+    color: '#b2926b',
+  },
+  {
+    kind: 'dresser',
+    name: 'チェスト',
+    category: '収納',
+    width: 1,
+    depth: 0.45,
+    height: 0.85,
+    color: '#b58f73',
+  },
+  {
+    kind: 'office-chair',
+    name: 'オフィスチェア',
+    category: 'ワークスペース',
+    width: 0.65,
+    depth: 0.65,
+    height: 1.15,
+    color: '#596a6b',
+  },
+  {
+    kind: 'floor-lamp',
+    name: 'フロアライト',
+    category: 'リビング',
+    width: 0.45,
+    depth: 0.45,
+    height: 1.6,
+    color: '#d7c8a9',
+  },
+  {
+    kind: 'kitchen-island',
+    name: 'キッチンアイランド',
+    category: 'キッチン',
+    width: 1.6,
+    depth: 0.8,
+    height: 0.9,
+    color: '#8d9b8c',
   },
 ];
 export const catalogItem = (kind: FurnitureKind) =>

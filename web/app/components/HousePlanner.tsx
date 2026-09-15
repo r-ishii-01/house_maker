@@ -99,6 +99,11 @@ const COLORS = [
   '#525a60',
   '#ece7db',
 ];
+// カテゴリを共有カタログから取り出し、家具の追加時に絞り込み先が欠落しないようにする。
+const FURNITURE_CATEGORIES = [
+  'すべて',
+  ...new Set(FURNITURE_CATALOG.map((item) => item.category)),
+];
 type ViewMode = 'split' | '2d' | '3d';
 const MIN_PLAN_WIDTH = 4;
 
@@ -665,7 +670,7 @@ export default function HousePlanner() {
               <span className="eyebrow">COLLECTION</span>
               <h2>家具を置く</h2>
             </div>
-            <span className="count-pill">10</span>
+            <span className="count-pill">{FURNITURE_CATALOG.length}</span>
           </div>
           <p className="panel-intro">家具を選んで、間取りをクリック。</p>
           <Tabs
@@ -674,13 +679,7 @@ export default function HousePlanner() {
             className="category-tabs"
           >
             <TabsList aria-label="家具カテゴリー" className="category-list">
-              {[
-                'すべて',
-                'リビング',
-                'ダイニング',
-                'ベッドルーム',
-                'ワークスペース',
-              ].map((item) => (
+              {FURNITURE_CATEGORIES.map((item) => (
                 <TabsTrigger key={item} value={item}>
                   {item}
                 </TabsTrigger>
@@ -699,7 +698,11 @@ export default function HousePlanner() {
                 aria-pressed={pending === item.kind}
               >
                 <span className="furniture-preview">
-                  <svg viewBox="-1.5 -1.35 3 2.7" aria-hidden="true">
+                  {/* 小物も見分けられるよう、比較画像だけは実寸に比例した余白で枠へ収める。図面の実寸表示は変えない。 */}
+                  <svg
+                    viewBox={`${-item.width * 0.7} ${-item.depth * 0.7} ${item.width * 1.4} ${item.depth * 1.4}`}
+                    aria-hidden="true"
+                  >
                     <FurnitureFootprint kind={item.kind} color={item.color} />
                   </svg>
                   <span className="catalog-add">
@@ -721,7 +724,7 @@ export default function HousePlanner() {
           <div className="catalog-footer">
             <Leaf size={18} />
             <span>
-              家具は実寸で表示
+              図面上では実寸で表示
               <br />
               <strong>サイズは幅 × 奥行き</strong>
             </span>

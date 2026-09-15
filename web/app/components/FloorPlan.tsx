@@ -3,6 +3,9 @@
 /* oxlint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- 図面は画像として説明しつつ、扉配置・表示移動モードではフォーカス可能なSVG操作面として矢印とEnterを受け取る。 */
 // SVG座標を実寸のX/Z座標に変換し、ポインター操作の確定時だけ共有状態を更新する。
 import { useId, useRef, useState, type PointerEvent } from 'react';
+import { FurnitureFootprint } from './FurnitureFootprint';
+// 既存のカタログ・サンプルからの参照を維持し、描画実装だけを専用ファイルへ集約する。
+export { FurnitureFootprint } from './FurnitureFootprint';
 import {
   BOARD,
   catalogItem,
@@ -94,95 +97,6 @@ function DoorFootprint({
           strokeWidth=".025"
           strokeDasharray=".06 .04"
         />
-      )}
-    </g>
-  );
-}
-
-// 家具の平面図は3Dと同じカタログ寸法で描き、配置する前から占有面積を伝える。
-export function FurnitureFootprint({
-  kind,
-  color = '#88998d',
-}: {
-  kind: FurnitureKind;
-  color?: string;
-}) {
-  const { width: w, depth: d } = catalogItem(kind);
-  return (
-    <g fill={color} stroke="#54605c" strokeWidth=".025">
-      {kind === 'plant' ? (
-        <>
-          <circle r={w / 2} fill={color} opacity=".65" />
-          <circle r={w / 4} />
-          <path d="M-.2 0H.2M0-.2V.2" />
-        </>
-      ) : (
-        <>
-          <rect
-            x={-w / 2}
-            y={-d / 2}
-            width={w}
-            height={d}
-            rx={kind.includes('table') ? 0.12 : 0.05}
-          />
-          {(kind === 'sofa' || kind === 'armchair' || kind === 'chair') && (
-            <>
-              <rect
-                x={-w / 2 + 0.05}
-                y={-d / 2 + 0.04}
-                width={w - 0.1}
-                height={d * 0.2}
-                rx=".03"
-                fill="white"
-                fillOpacity=".18"
-              />
-              {kind === 'sofa' && (
-                <path
-                  d={`M${-w / 6} ${-d / 4}V${d / 2}M${w / 6} ${-d / 4}V${d / 2}`}
-                />
-              )}
-            </>
-          )}
-          {kind === 'bed' && (
-            <>
-              <rect
-                x={-w / 2 + 0.1}
-                y={-d / 2 + 0.12}
-                width={w / 2 - 0.15}
-                height=".4"
-                rx=".08"
-                fill="#f9faf7"
-              />
-              <rect
-                x=".05"
-                y={-d / 2 + 0.12}
-                width={w / 2 - 0.15}
-                height=".4"
-                rx=".08"
-                fill="#f9faf7"
-              />
-              <path d={`M${-w / 2} ${-d / 6}H${w / 2}`} />
-            </>
-          )}
-          {kind === 'desk' && (
-            <rect
-              x="-.25"
-              y="-.2"
-              width=".5"
-              height=".3"
-              rx=".02"
-              fill="#e1e6e3"
-            />
-          )}
-          {kind === 'bookshelf' && (
-            <path
-              d={`M${-w / 6} ${-d / 2}V${d / 2}M${w / 6} ${-d / 2}V${d / 2}`}
-            />
-          )}
-          {kind === 'television' && (
-            <path d={`M${-w / 2 + 0.1} 0H${w / 2 - 0.1}`} strokeWidth=".07" />
-          )}
-        </>
       )}
     </g>
   );
