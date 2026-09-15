@@ -146,7 +146,10 @@ function Solid({
   );
 }
 
-/** 全家具を幅・高さ・奥行きが1のローカル空間で作り、最後に実寸へ拡大する。 */
+/**
+ * 家具本体をX/Zが[-0.5, 0.5]、Yが[0, 1]のローカル空間で作り、最後に実寸へ拡大する。
+ * 正面は+Z。席数・収納の面・円形の天板を変え、同じ選択処理のまま種類を見分けられるようにする。
+ */
 function FurnitureShape({
   kind,
   color,
@@ -154,8 +157,9 @@ function FurnitureShape({
   kind: FurnitureKind;
   color: string;
 }) {
-  if (kind === 'sofa' || kind === 'armchair') {
-    const seats = kind === 'sofa' ? 3 : 1;
+  if (kind === 'sofa' || kind === 'loveseat' || kind === 'armchair') {
+    // 幅の違いを縮尺だけに任せず、座面の区切りも実際の席数へ揃える。
+    const seats = kind === 'sofa' ? 3 : kind === 'loveseat' ? 2 : 1;
     return (
       <group>
         {[-0.37, 0.37].flatMap((x) =>
@@ -212,7 +216,7 @@ function FurnitureShape({
         })}
         <Solid
           position={[-0.24, 0.62, 0.05]}
-          size={[kind === 'sofa' ? 0.14 : 0.3, 0.3, 0.14]}
+          size={[kind === 'armchair' ? 0.3 : 0.14, 0.3, 0.14]}
           color={LINEN}
           radius={0.04}
           rotation={[0.1, 0.12, -0.14]}
@@ -221,7 +225,11 @@ function FurnitureShape({
     );
   }
 
-  if (kind === 'coffee-table' || kind === 'dining-table') {
+  if (
+    kind === 'coffee-table' ||
+    kind === 'dining-table' ||
+    kind === 'side-table'
+  ) {
     const coffee = kind === 'coffee-table';
     return (
       <group>
@@ -239,7 +247,10 @@ function FurnitureShape({
               position={[x, 0.435, z]}
               size={[0.07, 0.87, 0.07]}
               color={WOOD}
-              rotation={[z * 0.09, 0, -x * 0.07]}
+              // 小型のサイドテーブルは直脚にし、接地面を実寸のY=0へ合わせる。
+              rotation={
+                kind === 'side-table' ? undefined : [z * 0.09, 0, -x * 0.07]
+              }
             />
           )),
         )}
@@ -265,6 +276,331 @@ function FurnitureShape({
             </mesh>
           </group>
         )}
+      </group>
+    );
+  }
+
+  if (kind === 'ottoman') {
+    return (
+      <group>
+        {[-0.35, 0.35].flatMap((x) =>
+          [-0.33, 0.33].map((z) => (
+            <Solid
+              key={`${x}-${z}`}
+              position={[x, 0.1, z]}
+              size={[0.09, 0.2, 0.09]}
+              color={DARK_WOOD}
+            />
+          )),
+        )}
+        <Solid
+          position={[0, 0.4, 0]}
+          size={[0.95, 0.44, 0.95]}
+          color={color}
+          radius={0.07}
+        />
+        {/* 背もたれを付けず、厚いクッションと下台の継ぎ目でスツールと区別する。 */}
+        <Solid
+          position={[0, 0.78, 0]}
+          size={[1, 0.44, 1]}
+          color={color}
+          radius={0.09}
+        />
+      </group>
+    );
+  }
+
+  if (kind === 'round-dining-table' || kind === 'stool') {
+    const stool = kind === 'stool';
+    // 円柱の半径0.5を幅・奥行きの両方へ拡大し、2Dの円形フットプリントに一致させる。
+    return (
+      <group>
+        <mesh position={[0, stool ? 0.91 : 0.95, 0]} castShadow receiveShadow>
+          <cylinderGeometry args={[0.5, 0.5, stool ? 0.18 : 0.1, 40]} />
+          <meshStandardMaterial color={color} roughness={0.64} />
+        </mesh>
+        {stool ? (
+          [-0.28, 0.28].flatMap((x) =>
+            [-0.28, 0.28].map((z) => (
+              <Solid
+                key={`${x}-${z}`}
+                position={[x, 0.415, z]}
+                size={[0.09, 0.83, 0.09]}
+                color={WOOD}
+              />
+            )),
+          )
+        ) : (
+          <group>
+            <mesh position={[0, 0.465, 0]} castShadow receiveShadow>
+              <cylinderGeometry args={[0.075, 0.1, 0.87, 24]} />
+              <meshStandardMaterial color={WOOD} roughness={0.65} />
+            </mesh>
+            <mesh position={[0, 0.025, 0]} castShadow receiveShadow>
+              <cylinderGeometry args={[0.3, 0.34, 0.05, 32]} />
+              <meshStandardMaterial color={WOOD} roughness={0.65} />
+            </mesh>
+          </group>
+        )}
+      </group>
+    );
+  }
+
+  if (kind === 'nightstand' || kind === 'dresser' || kind === 'wardrobe') {
+    const wardrobe = kind === 'wardrobe';
+    const rows = kind === 'nightstand' ? [0.325, 0.725] : [0.235, 0.52, 0.805];
+    // 本体・前板・取手を同じ寸法内に収める。+Z側の面で扉収納と引出収納を描き分ける。
+    return (
+      <group>
+        {[-0.39, 0.39].flatMap((x) =>
+          [-0.34, 0.34].map((z) => (
+            <Solid
+              key={`${x}-${z}`}
+              position={[x, 0.055, z]}
+              size={[0.075, 0.11, 0.09]}
+              color={DARK_WOOD}
+            />
+          )),
+        )}
+        <Solid
+          position={[0, 0.535, -0.035]}
+          size={[0.98, 0.87, 0.89]}
+          color={color}
+          radius={0.012}
+        />
+        <Solid
+          position={[0, 0.975, 0]}
+          size={[1, 0.05, 1]}
+          color={color}
+          radius={0.012}
+        />
+        <Solid
+          position={[0, 0.535, 0.418]}
+          size={[0.955, 0.835, 0.018]}
+          color={DARK_WOOD}
+          radius={0.004}
+        />
+        {wardrobe
+          ? [-0.242, 0.242].map((x) => (
+              <group key={x}>
+                <Solid
+                  position={[x, 0.54, 0.445]}
+                  size={[0.465, 0.805, 0.05]}
+                  color={color}
+                  radius={0.006}
+                />
+                <Solid
+                  position={[Math.sign(x) * 0.065, 0.53, 0.485]}
+                  size={[0.026, 0.11, 0.03]}
+                  color={DARK_WOOD}
+                  radius={0.006}
+                />
+              </group>
+            ))
+          : rows.map((y) => (
+              <group key={y}>
+                <Solid
+                  position={[0, y, 0.445]}
+                  size={[0.94, kind === 'nightstand' ? 0.365 : 0.255, 0.05]}
+                  color={color}
+                  radius={0.006}
+                />
+                <Solid
+                  position={[0, y + 0.035, 0.485]}
+                  size={[0.2, 0.024, 0.03]}
+                  color={DARK_WOOD}
+                  radius={0.006}
+                />
+              </group>
+            ))}
+      </group>
+    );
+  }
+
+  if (kind === 'office-chair') {
+    return (
+      <group>
+        {/* 5本脚とキャスターは中心から半径0.5以内に収め、回転後も配置寸法を越えない。 */}
+        {Array.from({ length: 5 }, (_, index) => {
+          const angle = (index * Math.PI * 2) / 5;
+          return (
+            <group key={index} rotation={[0, angle, 0]}>
+              <Solid
+                position={[0, 0.105, 0.205]}
+                size={[0.07, 0.055, 0.41]}
+                color="#424a47"
+              />
+              <mesh
+                position={[0, 0.0475, 0.405]}
+                rotation={[0, 0, Math.PI / 2]}
+                castShadow
+                receiveShadow
+              >
+                <cylinderGeometry args={[0.0475, 0.0475, 0.075, 12]} />
+                <meshStandardMaterial color="#343b37" roughness={0.75} />
+              </mesh>
+            </group>
+          );
+        })}
+        <mesh position={[0, 0.28, 0]} castShadow>
+          <cylinderGeometry args={[0.045, 0.06, 0.34, 16]} />
+          <meshStandardMaterial
+            color="#6d7670"
+            metalness={0.3}
+            roughness={0.45}
+          />
+        </mesh>
+        <Solid
+          position={[0, 0.44, 0.04]}
+          size={[0.83, 0.12, 0.86]}
+          color={color}
+          radius={0.06}
+        />
+        <Solid
+          position={[0, 0.715, -0.39]}
+          size={[0.13, 0.45, 0.07]}
+          color="#424a47"
+        />
+        <Solid
+          position={[0, 0.77, -0.345]}
+          size={[0.8, 0.46, 0.18]}
+          color={color}
+          radius={0.065}
+        />
+        {[-0.46, 0.46].map((x) => (
+          <group key={x}>
+            <Solid
+              position={[x, 0.52, 0.04]}
+              size={[0.055, 0.26, 0.07]}
+              color="#424a47"
+            />
+            <Solid
+              position={[x, 0.65, 0.04]}
+              size={[0.08, 0.06, 0.5]}
+              color={color}
+              radius={0.02}
+            />
+          </group>
+        ))}
+      </group>
+    );
+  }
+
+  if (kind === 'floor-lamp') {
+    return (
+      <group>
+        <mesh position={[0, 0.0175, 0]} castShadow receiveShadow>
+          <cylinderGeometry args={[0.34, 0.36, 0.035, 32]} />
+          <meshStandardMaterial color={DARK_WOOD} roughness={0.6} />
+        </mesh>
+        <mesh position={[0, 0.45, 0]} castShadow>
+          <cylinderGeometry args={[0.026, 0.035, 0.84, 16]} />
+          <meshStandardMaterial color={WOOD} roughness={0.65} />
+        </mesh>
+        {/* 発光用ライトは増やさず、明るい布色の傘で照明器具を表現する。 */}
+        <mesh position={[0, 0.87, 0]} castShadow receiveShadow>
+          <cylinderGeometry args={[0.33, 0.5, 0.26, 40]} />
+          <meshStandardMaterial color={color} roughness={0.94} />
+        </mesh>
+      </group>
+    );
+  }
+
+  if (kind === 'kitchen-island') {
+    return (
+      <group>
+        <Solid
+          position={[0, 0.06, -0.025]}
+          size={[0.88, 0.12, 0.78]}
+          color={DARK_WOOD}
+        />
+        <Solid
+          position={[0, 0.5, -0.025]}
+          size={[0.96, 0.82, 0.87]}
+          color={WOOD}
+          radius={0.01}
+        />
+        <Solid
+          position={[0, 0.95, 0]}
+          size={[1, 0.08, 1]}
+          color={color}
+          radius={0.018}
+          roughness={0.38}
+        />
+        {/* 2Dと同じ左シンク・右2口の配置。天板をY=0.99にし、薄い設備も全高1以内へ収める。 */}
+        <Solid
+          position={[-0.22, 0.991, 0]}
+          size={[0.28, 0.002, 0.5]}
+          color="#718483"
+          radius={0.001}
+          roughness={0.3}
+        />
+        {[-0.37, -0.07].map((x) => (
+          <Solid
+            key={x}
+            position={[x, 0.995, 0]}
+            size={[0.02, 0.01, 0.54]}
+            color="#b8c4c0"
+            radius={0.003}
+            roughness={0.25}
+          />
+        ))}
+        {[-0.26, 0.26].map((z) => (
+          <Solid
+            key={z}
+            position={[-0.22, 0.995, z]}
+            size={[0.28, 0.01, 0.02]}
+            color="#b8c4c0"
+            radius={0.003}
+            roughness={0.25}
+          />
+        ))}
+        {/* 実寸の幅は奥行きの2倍なので、X半径をZの半分にして拡大後のコンロを正円にする。 */}
+        {[-0.2, 0.2].map((z) => (
+          <mesh
+            key={z}
+            position={[0.24, 0.995, z]}
+            scale={[0.065, 1, 0.13]}
+            castShadow
+            receiveShadow
+          >
+            <cylinderGeometry args={[1, 1, 0.01, 32]} />
+            <meshStandardMaterial color="#35433d" roughness={0.36} />
+          </mesh>
+        ))}
+        {/* 天板下は引出3段と開き戸2枚。取手まで奥行き1以内に収める。 */}
+        {[0.23, 0.485, 0.74].map((y) => (
+          <group key={y}>
+            <Solid
+              position={[-0.315, y, 0.423]}
+              size={[0.29, 0.23, 0.035]}
+              color={LINEN}
+              radius={0.006}
+            />
+            <Solid
+              position={[-0.315, y + 0.05, 0.465]}
+              size={[0.14, 0.02, 0.045]}
+              color={DARK_WOOD}
+              radius={0.005}
+            />
+          </group>
+        ))}
+        {[0, 0.315].map((x) => (
+          <group key={x}>
+            <Solid
+              position={[x, 0.485, 0.423]}
+              size={[0.29, 0.74, 0.035]}
+              color={LINEN}
+              radius={0.006}
+            />
+            <Solid
+              position={[x - 0.085, 0.75, 0.465]}
+              size={[0.02, 0.13, 0.045]}
+              color={DARK_WOOD}
+              radius={0.005}
+            />
+          </group>
+        ))}
       </group>
     );
   }
@@ -306,7 +642,7 @@ function FurnitureShape({
     );
   }
 
-  if (kind === 'bed') {
+  if (kind === 'bed' || kind === 'single-bed') {
     return (
       <group>
         <Solid
@@ -322,7 +658,7 @@ function FurnitureShape({
           radius={0.055}
         />
         <Solid
-          position={[0, 0.64, -0.46]}
+          position={[0, 0.64, kind === 'single-bed' ? -0.4575 : -0.46]}
           size={[1, 0.72, 0.085]}
           color={color}
           radius={0.03}
@@ -339,11 +675,12 @@ function FurnitureShape({
           color="#e1d6bf"
           radius={0.012}
         />
-        {[-0.235, 0.235].map((x) => (
+        {/* 単床は中央の枕1つ、既存のダブルベッドは枕2つを維持する。 */}
+        {(kind === 'single-bed' ? [0] : [-0.235, 0.235]).map((x) => (
           <Solid
             key={x}
             position={[x, 0.55, -0.27]}
-            size={[0.39, 0.13, 0.2]}
+            size={[kind === 'single-bed' ? 0.68 : 0.39, 0.13, 0.2]}
             color="#faf6ec"
             radius={0.045}
           />
@@ -496,40 +833,46 @@ function FurnitureShape({
     );
   }
 
-  // テレビの画面も色付きの面で生成し、画像や動画の取得を不要にする。
-  return (
-    <group>
-      <Solid
-        position={[0, 0.625, 0]}
-        size={[1, 0.75, 0.15]}
-        color={color}
-        radius={0.015}
-        roughness={0.48}
-      />
-      <Solid
-        position={[0, 0.628, 0.081]}
-        size={[0.94, 0.67, 0.012]}
-        color="#253e3c"
-        radius={0.005}
-        roughness={0.24}
-      />
-      <Solid
-        position={[0, 0.625, -0.03]}
-        size={[0.43, 0.3, 0.23]}
-        color={color}
-        radius={0.025}
-      />
-      {[-0.3, 0.3].map((x) => (
+  if (kind === 'television') {
+    // テレビの画面も色付きの面で生成し、画像や動画の取得を不要にする。
+    return (
+      <group>
         <Solid
-          key={x}
-          position={[x, 0.135, 0]}
-          size={[0.045, 0.24, 0.45]}
-          color="#3e423e"
-          rotation={[0, 0, x]}
+          position={[0, 0.625, 0]}
+          size={[1, 0.75, 0.15]}
+          color={color}
+          radius={0.015}
+          roughness={0.48}
         />
-      ))}
-    </group>
-  );
+        <Solid
+          position={[0, 0.628, 0.081]}
+          size={[0.94, 0.67, 0.012]}
+          color="#253e3c"
+          radius={0.005}
+          roughness={0.24}
+        />
+        <Solid
+          position={[0, 0.625, -0.03]}
+          size={[0.43, 0.3, 0.23]}
+          color={color}
+          radius={0.025}
+        />
+        {[-0.3, 0.3].map((x) => (
+          <Solid
+            key={x}
+            position={[x, 0.135, 0]}
+            size={[0.045, 0.24, 0.45]}
+            color="#3e423e"
+            rotation={[0, 0, x]}
+          />
+        ))}
+      </group>
+    );
+  }
+
+  // 種類を追加して描画を忘れた場合は型検査を失敗させ、別の家具で代用されるのを防ぐ。
+  const unsupportedKind: never = kind;
+  throw new Error(`未対応の家具です: ${String(unsupportedKind)}`);
 }
 
 /** 選択枠は家具と同じ回転に追従するので、配置面積が分かりやすい。 */

@@ -1514,7 +1514,11 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .catalog-grid {
-    grid-template-columns: repeat(5, minmax(95px, 1fr));
+    /* 家具が増えても一覧は2段に保ち、ページ全体ではなくカタログ内だけを横へ移動する。 */
+    grid-template-columns: none;
+    grid-template-rows: repeat(2, auto);
+    grid-auto-flow: column;
+    grid-auto-columns: 112px;
     overflow-x: auto;
     gap: 10px;
     padding: 0 15px 15px;
